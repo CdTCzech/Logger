@@ -1,0 +1,7 @@
+/.vs/
+/Logger/x64/
+/LoggerTestClient/.vs/
+/LoggerTestClient/LoggerTestClient/x64/
+/LoggerTestClient/x64/
+/x64/
+*.user
