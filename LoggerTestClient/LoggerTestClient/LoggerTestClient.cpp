@@ -19,6 +19,8 @@
 #define DEFAULT_BUFLEN 512
 #define DEFAULT_PORT "27015"
 
+constexpr uint64_t magic = 0xDEAD1991FACE2018;
+
 enum Level : uint8_t
 {
 	Off,
@@ -48,6 +50,20 @@ struct Log
 	uint16_t m_size;
 };
 #pragma pack(pop)
+
+bool sendMessage(const SOCKET ConnectSocket, const char* buffer, size_t bufferIndex)
+{
+	// Send an initial buffer
+	auto iResult = send(ConnectSocket, buffer, bufferIndex, 0);
+	if (iResult == SOCKET_ERROR) {
+		printf("send failed with error: %d\n", WSAGetLastError());
+		closesocket(ConnectSocket);
+		WSACleanup();
+		return false;
+	}
+	printf("Bytes Sent: %ld\n", iResult);
+	return true;
+}
 
 int __cdecl main(int argc, char **argv)
 {
@@ -117,19 +133,72 @@ int __cdecl main(int argc, char **argv)
 		return 1;
 	}
 
-	std::string test = "A";
+	// !!! HANDSHAKE !!!
+
+	// HELLO
 
 	Header header;
-	Log log;
 	header.m_magic = 0xDEAD1991FACE2018;
+	header.m_type = 0;
+	header.m_size = 5;
+
+	char buffer[4096];
+	size_t bufferIndex = 0;
+
+	std::string test = "H3LL0";
+
+	memcpy(buffer, &header, sizeof(Header));
+	bufferIndex = sizeof(Header);
+	memcpy(buffer + bufferIndex, test.data(), test.size());
+	bufferIndex += test.size();
+
+	if (!sendMessage(ConnectSocket, buffer, bufferIndex))
+	{
+		return 1;
+	}
+
+	// WHO_ARE_U?
+
+	auto ret = recv(ConnectSocket, buffer, sizeof(Header) + 10, 0);
+	auto tempHeader = reinterpret_cast<const Header*>(buffer);
+	if (ret <= 0 or tempHeader->m_magic != magic or tempHeader->m_type != 0 or tempHeader->m_size != 10)
+	{
+		return false;
+	}
+	std::string hello(buffer + sizeof(Header), 10);
+	if (hello != "WHO_ARE_U?")
+	{
+		return false;
+	}
+
+	// YOUR_DAD
+
+	test = "YOUR_DAD";
+	header.m_size = 8;
+
+	memcpy(buffer, &header, sizeof(Header));
+	bufferIndex = sizeof(Header);
+	memcpy(buffer + bufferIndex, test.data(), test.size());
+	bufferIndex += test.size();
+
+	if (!sendMessage(ConnectSocket, buffer, bufferIndex))
+	{
+		return 1;
+	}
+
+	// !!! SEND MESSAGES !!!
+
+	// CORRECT INFO MESSAGE
+
+	test = "A";
+
+	Log log;
 	header.m_type = 1;
 	header.m_size = sizeof(Log) + test.size();
 	log.m_datetime = std::chrono::system_clock::now().time_since_epoch().count();
 	log.m_priority = Level::Info;
 	log.m_size = test.size();
 
-	char buffer[4096];
-	size_t bufferIndex = 0;
 	memcpy(buffer, &header, sizeof(Header));
 	bufferIndex = sizeof(Header);
 	memcpy(buffer + bufferIndex, &log, sizeof(Log));
@@ -137,45 +206,37 @@ int __cdecl main(int argc, char **argv)
 	memcpy(buffer + bufferIndex, test.data(), test.size());
 	bufferIndex += test.size();
 
-	// Send an initial buffer
-	iResult = send(ConnectSocket, buffer, bufferIndex, 0);
-	if (iResult == SOCKET_ERROR) {
-		printf("send failed with error: %d\n", WSAGetLastError());
-		closesocket(ConnectSocket);
-		WSACleanup();
+	if (!sendMessage(ConnectSocket, buffer, bufferIndex))
+	{
 		return 1;
 	}
 
-	printf("Bytes Sent: %ld\n", iResult);
+	// WRONG MAGIC - 26 BYTES
 
 	header.m_magic = 0x77771991FACE7777;
 	memcpy(buffer, &header, sizeof(Header));
 
-	// Send an initial buffer
-	iResult = send(ConnectSocket, buffer, bufferIndex, 0);
-	if (iResult == SOCKET_ERROR) {
-		printf("send failed with error: %d\n", WSAGetLastError());
-		closesocket(ConnectSocket);
-		WSACleanup();
+	if (!sendMessage(ConnectSocket, buffer, bufferIndex))
+	{
 		return 1;
 	}
 
-	printf("Bytes Sent: %ld\n", iResult);
+	// 50 CORRECT DEBUG MESSAGES
 
 	for (int i = 0; i < 50; ++i)
 	{
 		std::string temp;
 		for (auto j = 0; j < i; ++j)
 		{
-			temp += 65 + j;//(rand() % 26) + 65;
+			temp += (rand() % 26) + 65;
 		}
 
-		header.m_magic = 0xDEAD1991FACE2018;
+		header.m_magic = magic;
 
 		bufferIndex = 0;
 		test = "This should also get to you... " + temp;
 		header.m_size = sizeof(Log) + test.size();
-		log.m_datetime = i; // std::chrono::system_clock::now().time_since_epoch().count();
+		log.m_datetime = std::chrono::system_clock::now().time_since_epoch().count();
 		log.m_priority = Level::Debug;
 		log.m_size = test.size();
 		memcpy(buffer, &header, sizeof(Header));
@@ -185,16 +246,10 @@ int __cdecl main(int argc, char **argv)
 		memcpy(buffer + bufferIndex, test.data(), test.size());
 		bufferIndex += test.size();
 
-		// Send an initial buffer
-		iResult = send(ConnectSocket, buffer, bufferIndex, 0);
-		if (iResult == SOCKET_ERROR) {
-			printf("send failed with error: %d\n", WSAGetLastError());
-			closesocket(ConnectSocket);
-			WSACleanup();
+		if (!sendMessage(ConnectSocket, buffer, bufferIndex))
+		{
 			return 1;
 		}
-
-		printf("Bytes Sent: %ld\n", iResult);
 	}
 
 	// shutdown the connection since no more data will be sent

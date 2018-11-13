@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 
+#include "Client.h"
 #include "Message.h"
 
 #include <array>
@@ -8,10 +9,14 @@
 #include <string>
 #include <thread>
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
 
 #pragma comment (lib, "Ws2_32.lib")
+
+constexpr uint64_t magic = 0xDEAD1991FACE2018;
+constexpr int bufferSize = 4096;
+
 
 SOCKET getListenSocket()
 {
@@ -77,20 +82,70 @@ SOCKET getListenSocket()
 	return listenSocket;
 }
 
-void listenToClient(SOCKET client)
+bool setTimeout(Client& client, int timeout)
 {
-	constexpr int bufferSize = 4096;
-	std::array<char, bufferSize> buffer;
+	auto ret = setsockopt(client.m_socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&timeout), sizeof(timeout));
+	if (ret != ERROR_SUCCESS)
+	{
+		std::cout << "setsockopt to " << timeout << " failed with error: " << WSAGetLastError() << std::endl;
+		return false;
+	}
+	return true;
+}
+
+bool handshake(Client& client, std::array<char, bufferSize>& buffer)
+{
+	if (!setTimeout(client, 0/*10'000*/))
+	{
+		return false;
+	}
+
+	auto ret = recv(client.m_socket, buffer.data(), sizeof(Message::Header) + 5, 0);
+	auto tempHeader = reinterpret_cast<const Message::Header*>(buffer.data());
+	if (ret <= 0 or tempHeader->m_magic != magic or tempHeader->m_type != 0 or tempHeader->m_size != 5)
+	{
+		return false;
+	}
+	std::string hello(buffer.data() + sizeof(Message::Header), 5);
+	if (hello != "H3LL0")
+	{
+		return false;
+	}
+
+	Message::Header header;
+	header.m_magic = magic;
+	header.m_type = 0;
+	header.m_size = 10;
+	int size = 0;
+	memcpy(buffer.data(), &header, sizeof(Message::Header));
+	size += sizeof(Message::Header);
+	memcpy(buffer.data() + size, "WHO_ARE_U?", 10);
+	size += 10;
+	ret = send(client.m_socket, buffer.data(), size, 0);
+	if (ret <= 0)
+	{
+		return false;
+	}
+
+	ret = recv(client.m_socket, buffer.data(), sizeof(Message::Header) + 8, 0);
+	if (ret <= 0 or tempHeader->m_magic != magic or tempHeader->m_type != 0 or tempHeader->m_size != 8)
+	{
+		return false;
+	}
+	client.m_name = std::string(buffer.data() + sizeof(Message::Header), 8);
+	std::cout << "[client: " << client.m_socket << "] -> [client: " << client.m_name << "]" << std::endl;
+
+	return setTimeout(client, 0);
+}
+
+void listenToClient(Client& client, std::array<char, bufferSize>& buffer)
+{
 	size_t index = 0;
-	int ret = 0;
 	size_t invalidBytesCount = 0;
 
-	std::cout << "[client: " << client << "] Opening connection" << std::endl;
-
-	// Receive until the peer shuts down the connection
 	while (true)
 	{
-		ret = recv(client, buffer.data() + index, 11, 0);
+		auto ret = recv(client.m_socket, buffer.data() + index, 11, 0);
 		if (ret > 0)
 		{
 			size_t bufferIndex = 0;
@@ -109,7 +164,7 @@ void listenToClient(SOCKET client)
 
 					auto tempHeader = reinterpret_cast<const Message::Header*>(buffer.data() + bufferIndex);
 
-					if (tempHeader->m_magic != 0xDEAD1991FACE2018)
+					if (tempHeader->m_magic != magic)
 					{
 						--index;
 						++bufferIndex;
@@ -119,7 +174,7 @@ void listenToClient(SOCKET client)
 					{
 						if (invalidBytesCount)
 						{
-							std::cout << "[client: " << client << "] Header found after " << invalidBytesCount << " invalid bytes" << std::endl;
+							std::cout << "[client: " << client.m_name << "] Header found after " << invalidBytesCount << " invalid bytes" << std::endl;
 							invalidBytesCount = 0;
 						}
 						header = tempHeader;
@@ -136,7 +191,7 @@ void listenToClient(SOCKET client)
 					break;
 				}
 
-				std::cout << "[client: " << client << "] ";
+				std::cout << "[client: " << client.m_name << "] ";
 
 				switch (header->m_type)
 				{
@@ -158,25 +213,37 @@ void listenToClient(SOCKET client)
 		}
 		else if (ret == 0)
 		{
-			std::cout << "[client: " << client << "] Closing connection" << std::endl;
+			std::cout << "[client: " << client.m_name << "] Closing connection" << std::endl;
 			break;
 		}
 		else
 		{
-			std::cout << "[client: " << client << "] Failed to recieve message" << std::endl;
+			std::cout << "[client: " << client.m_name << "] Failed to recieve message" << std::endl;
 			break;
 		}
 	}
+}
+
+void handleClient(Client&& client)
+{
+	std::array<char, bufferSize> buffer;
+
+	std::cout << "[client: " << client.m_socket << "] Opening connection" << std::endl;
+
+	if (handshake(client, buffer))
+	{
+		listenToClient(client, buffer);
+	}
 
 	// shutdown the connection since we're done
-	ret = shutdown(client, SD_SEND);
+	auto ret = shutdown(client.m_socket, SD_SEND);
 	if (ret == SOCKET_ERROR)
 	{
-		std::cout << "[client: " << client << "] Shutdown failed with error: " << WSAGetLastError() << std::endl;
+		std::cout << "[client: " << client.m_name << "] Shutdown failed with error: " << WSAGetLastError() << std::endl;
 	}
 
 	// cleanup
-	closesocket(client);
+	closesocket(client.m_socket);
 }
 
 void acceptClients()
@@ -191,15 +258,18 @@ void acceptClients()
 	while (true)
 	{
 		// Accept a client socket
-		SOCKET client = INVALID_SOCKET;
-		client = accept(listenSocket, nullptr, nullptr);
-		if (client == INVALID_SOCKET)
+		SOCKET clientSocket = INVALID_SOCKET;
+		clientSocket = accept(listenSocket, nullptr, nullptr);
+		if (clientSocket == INVALID_SOCKET)
 		{
 			std::cout << "accept failed with error: " << WSAGetLastError() << std::endl;
 			continue;
 		}
 
-		std::thread clientThread(listenToClient, client);
+		Client client;
+		client.m_socket = clientSocket;
+
+		std::thread clientThread(handleClient, std::move(client));
 		clientThread.detach();
 	}
 
