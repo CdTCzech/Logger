@@ -120,6 +120,7 @@ void listenToClient(SOCKET client)
 						if (invalidBytesCount)
 						{
 							std::cout << "[client: " << client << "] Header found after " << invalidBytesCount << " invalid bytes" << std::endl;
+							invalidBytesCount = 0;
 						}
 						header = tempHeader;
 						break;
@@ -128,6 +129,10 @@ void listenToClient(SOCKET client)
 
 				if (header == nullptr or sizeof(Message::Header) + header->m_size > index)
 				{
+					if (bufferIndex > 0)
+					{
+						memcpy(buffer.data(), buffer.data() + bufferIndex, index);
+					}
 					break;
 				}
 

@@ -31,19 +31,23 @@ enum Level : uint8_t
 	Verbose
 };
 
+#pragma pack(push, 1)
 struct Header
 {
 	uint64_t m_magic;
 	uint16_t m_type;
 	uint32_t m_size;
 };
+#pragma pack(pop)
 
+#pragma pack(push, 1)
 struct Log
 {
 	uint64_t m_datetime;
 	Level m_priority;
 	uint16_t m_size;
 };
+#pragma pack(pop)
 
 int __cdecl main(int argc, char **argv)
 {
@@ -144,6 +148,20 @@ int __cdecl main(int argc, char **argv)
 
 	printf("Bytes Sent: %ld\n", iResult);
 
+	header.m_magic = 0x77771991FACE7777;
+	memcpy(buffer, &header, sizeof(Header));
+
+	// Send an initial buffer
+	iResult = send(ConnectSocket, buffer, bufferIndex, 0);
+	if (iResult == SOCKET_ERROR) {
+		printf("send failed with error: %d\n", WSAGetLastError());
+		closesocket(ConnectSocket);
+		WSACleanup();
+		return 1;
+	}
+
+	printf("Bytes Sent: %ld\n", iResult);
+
 	for (int i = 0; i < 50; ++i)
 	{
 		std::string temp;
@@ -152,11 +170,13 @@ int __cdecl main(int argc, char **argv)
 			temp += 65 + j;//(rand() % 26) + 65;
 		}
 
+		header.m_magic = 0xDEAD1991FACE2018;
+
 		bufferIndex = 0;
 		test = "This should also get to you... " + temp;
 		header.m_size = sizeof(Log) + test.size();
-		log.m_datetime = std::chrono::system_clock::now().time_since_epoch().count();
-		log.m_priority = Level::Info;
+		log.m_datetime = i; // std::chrono::system_clock::now().time_since_epoch().count();
+		log.m_priority = Level::Debug;
 		log.m_size = test.size();
 		memcpy(buffer, &header, sizeof(Header));
 		bufferIndex = sizeof(Header);

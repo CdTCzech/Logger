@@ -7,19 +7,23 @@
 
 namespace Message
 {
+#pragma pack(push, 1)
 	struct Header
 	{
 		uint64_t m_magic;
 		uint16_t m_type;
-		uint16_t m_size;
+		uint32_t m_size;
 	};
+#pragma pack(pop)
 
+#pragma pack(push, 1)
 	struct Log
 	{
 		uint64_t m_datetime;
 		Priority::Level m_priority;
 		uint16_t m_size;
 	};
+#pragma pack(pop)
 
 	std::string parseCommand(const char* message)
 	{
